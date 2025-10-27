@@ -52,13 +52,6 @@
     }
     header { color: #1e3a8a; }
     header svg { width: 52px; height: 52px; vertical-align: middle; margin-right: 10px; }
-    .controls {
-      display:flex;
-      gap:18px;
-      align-items:center;
-      justify-content:center;
-      width:100%;
-    }
     .joystick-container {
       display: flex;
       justify-content: space-around;
@@ -86,7 +79,7 @@
       border-radius:50%;
       box-shadow: 0 8px 18px rgba(0,0,0,0.25);
       transform: translate(0,0);
-      transition: transform 0.12s cubic-bezier(.2,.9,.3,1);
+      transition: transform 0.1s cubic-bezier(.2,.9,.3,1);
       touch-action:none;
     }
     .row { display:flex; gap:12px; align-items:center; justify-content:center; }
@@ -146,177 +139,113 @@
   </div>
 
   <script>
-    // UUIDs must match the ESP32 sketch
     const SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0";
     const CHARACTERISTIC_UUID = "abcdef01-1234-5678-1234-56789abcdef0";
-
     let bluetoothDevice = null;
     let txCharacteristic = null;
+
     const connectionStatusEl = document.getElementById('connectionStatus');
     const connectBtn = document.getElementById('connectBtn');
     const reconnectBtn = document.getElementById('reconnectBtn');
 
-    // Save last device id for a best-effort reconnect (getDevices API)
-    function saveLastDeviceId(id) {
-      try { localStorage.setItem('rusty_last_device', id); } catch(e){}
-    }
-    function getLastDeviceId() {
-      try { return localStorage.getItem('rusty_last_device'); } catch(e){ return null; }
-    }
-
     async function requestAndConnect() {
       try {
-        // Robust: filter by service UUID (works regardless of device name)
         const device = await navigator.bluetooth.requestDevice({
           filters: [{ services: [SERVICE_UUID] }],
           optionalServices: [SERVICE_UUID]
         });
-        if (!device) return;
-        saveLastDeviceId(device.id);
         await connectDevice(device);
       } catch (err) {
-        alert("Could not connect: " + (err && err.message ? err.message : err));
-        console.error(err);
+        alert("Connection failed: " + err);
       }
     }
 
     async function connectDevice(device) {
       bluetoothDevice = device;
       connectionStatusEl.textContent = "Connecting...";
-      try {
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService(SERVICE_UUID);
-        txCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
-        connectionStatusEl.textContent = `Connected: ${device.name || device.id}`;
-        connectBtn.style.display = 'none';
-        reconnectBtn.style.display = 'inline-block';
-        device.addEventListener('gattserverdisconnected', handleDisconnect);
-        console.log("Connected to", device);
-      } catch (e) {
-        txCharacteristic = null;
-        connectionStatusEl.textContent = "Not connected";
-        console.error("connectDevice error:", e);
-        throw e;
-      }
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService(SERVICE_UUID);
+      txCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+      connectionStatusEl.textContent = `Connected: ${device.name || "Rusty Arm"}`;
+      connectBtn.style.display = "none";
+      reconnectBtn.style.display = "inline-block";
+      device.addEventListener("gattserverdisconnected", handleDisconnect);
     }
 
-    async function handleDisconnect(evt) {
-      const device = evt.target;
-      console.warn("Device disconnected:", device);
+    async function handleDisconnect() {
       connectionStatusEl.textContent = "Disconnected — retrying...";
       txCharacteristic = null;
-      // Try auto-reconnect a few times
-      for (let i=0;i<5;i++){
-        try {
-          await connectDevice(device);
-          console.log("Auto-reconnected");
-          return;
-        } catch(e) {
-          await new Promise(r=>setTimeout(r,2000));
-        }
+      try {
+        await connectDevice(bluetoothDevice);
+      } catch {
+        connectionStatusEl.textContent = "Disconnected";
+        connectBtn.style.display = "inline-block";
       }
-      connectionStatusEl.textContent = "Disconnected";
-      connectBtn.style.display = 'inline-block';
-      reconnectBtn.style.display = 'inline-block';
     }
 
-    // Attempt to auto-reconnect on page load (best-effort)
-    window.addEventListener('load', async () => {
-      if (!navigator.bluetooth) {
-        alert("Web Bluetooth not supported in this browser. Use Chrome/Edge and open over HTTPS or localhost.");
-        return;
-      }
-      const lastId = getLastDeviceId();
-      if (lastId && navigator.bluetooth.getDevices) {
-        try {
-          const devices = await navigator.bluetooth.getDevices();
-          const dev = devices.find(d => d.id === lastId);
-          if (dev) {
-            await connectDevice(dev);
-            console.log("Auto-reconnected to stored device");
-            return;
-          }
-        } catch(e){
-          console.warn("Auto-reconnect attempt failed", e);
-        }
-      }
-    });
-
-    connectBtn.addEventListener('click', () => requestAndConnect());
-    reconnectBtn.addEventListener('click', async () => {
-      if (bluetoothDevice && bluetoothDevice.gatt) {
-        try { await connectDevice(bluetoothDevice); return; } catch(e){}
-      }
-      requestAndConnect();
-    });
+    connectBtn.addEventListener("click", requestAndConnect);
+    reconnectBtn.addEventListener("click", requestAndConnect);
 
     async function sendCommand(cmd) {
-      if (!txCharacteristic) {
-        console.warn("No BLE characteristic to send to.");
-        return;
-      }
-      try {
-        const enc = new TextEncoder();
-        await txCharacteristic.writeValue(enc.encode(cmd));
-        // debug
-        console.log("Sent BLE:", cmd);
-      } catch (e) {
-        console.error("Write failed:", e);
-      }
+      if (!txCharacteristic) return;
+      await txCharacteristic.writeValue(new TextEncoder().encode(cmd));
+      console.log("Sent:", cmd);
     }
 
-    // Joystick handling (A = left, B = right)
     function setupJoystick(joyEl, stickEl, prefix) {
-      const maxRange = 44; // px
-      let active = false, cx = 0, cy = 0;
+      const maxRange = 44;
+      let activeTouchId = null;
+      let centerX = 0, centerY = 0;
 
       function start(e) {
-        active = true;
-        const t = (e.touches && e.touches[0]) || e;
+        const touch = e.changedTouches ? e.changedTouches[0] : e;
+        if (activeTouchId !== null) return; // one touch per joystick
+        activeTouchId = touch.identifier !== undefined ? touch.identifier : 'mouse';
         const rect = joyEl.getBoundingClientRect();
-        cx = rect.left + rect.width/2;
-        cy = rect.top + rect.height/2;
+        centerX = rect.left + rect.width / 2;
+        centerY = rect.top + rect.height / 2;
         move(e);
-        e.preventDefault();
       }
+
       function move(e) {
-        if (!active) return;
-        const t = (e.touches && e.touches[0]) || e;
-        let dx = t.clientX - cx;
-        let dy = t.clientY - cy;
-        const dist = Math.min(Math.hypot(dx,dy), maxRange);
-        const ang = Math.atan2(dy,dx);
-        const x = Math.cos(ang)*dist;
-        const y = Math.sin(ang)*dist;
-        stickEl.style.transform = `translate(${x}px, ${y}px)`;
-
-        // 4-way detection
-        let cmd = '';
-        if (Math.abs(x) > Math.abs(y)) {
-          if (x > 18) cmd = prefix + '_RIGHT';
-          else if (x < -18) cmd = prefix + '_LEFT';
-        } else {
-          if (y > 18) cmd = prefix + '_DOWN';
-          else if (y < -18) cmd = prefix + '_UP';
+        const touches = e.changedTouches ? Array.from(e.changedTouches) : [e];
+        for (const t of touches) {
+          if (t.identifier !== activeTouchId && activeTouchId !== 'mouse') continue;
+          let dx = t.clientX - centerX;
+          let dy = t.clientY - centerY;
+          const dist = Math.min(Math.hypot(dx, dy), maxRange);
+          const ang = Math.atan2(dy, dx);
+          const x = Math.cos(ang) * dist;
+          const y = Math.sin(ang) * dist;
+          stickEl.style.transform = `translate(${x}px, ${y}px)`;
+          let cmd = '';
+          if (Math.abs(x) > Math.abs(y)) cmd = x > 18 ? `${prefix}_RIGHT` : x < -18 ? `${prefix}_LEFT` : '';
+          else cmd = y > 18 ? `${prefix}_DOWN` : y < -18 ? `${prefix}_UP` : '';
+          if (cmd) sendCommand(cmd);
         }
-        if (cmd) sendCommand(cmd);
-      }
-      function end(e) {
-        active = false;
-        stickEl.style.transform = `translate(0,0)`;
-        sendCommand(prefix + '_CENTER');
       }
 
-      joyEl.addEventListener('touchstart', start);
-      joyEl.addEventListener('mousedown', start);
-      document.addEventListener('touchmove', move, {passive:false});
-      document.addEventListener('mousemove', move);
-      document.addEventListener('touchend', end);
-      document.addEventListener('mouseup', end);
+      function end(e) {
+        const touches = e.changedTouches ? Array.from(e.changedTouches) : [e];
+        for (const t of touches) {
+          if (t.identifier === activeTouchId || activeTouchId === 'mouse') {
+            stickEl.style.transform = `translate(0,0)`;
+            sendCommand(`${prefix}_CENTER`);
+            activeTouchId = null;
+          }
+        }
+      }
+
+      joyEl.addEventListener("touchstart", start);
+      joyEl.addEventListener("mousedown", start);
+      document.addEventListener("touchmove", move, { passive: false });
+      document.addEventListener("mousemove", move);
+      document.addEventListener("touchend", end);
+      document.addEventListener("mouseup", end);
     }
 
-    setupJoystick(document.getElementById('joystickA'), document.getElementById('stickA'), 'A');
-    setupJoystick(document.getElementById('joystickB'), document.getElementById('stickB'), 'B');
+    setupJoystick(document.getElementById("joystickA"), document.getElementById("stickA"), "A");
+    setupJoystick(document.getElementById("joystickB"), document.getElementById("stickB"), "B");
   </script>
 </body>
 </html>
