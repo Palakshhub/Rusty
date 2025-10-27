@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RUSTY Control Hub</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath fill='%230099FF' d='M10 58h44v4H10zM32 4a4 4 0 0 1 4 4v8l8 8-4 4-8-8-8 8-4-4 8-8V8a4 4 0 0 1 4-4zM28 36h8v14h-8z'/%3E%3C/svg%3E">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Quicksand', sans-serif;
+      height: 100vh;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+      color: #1e3a8a;
+    }
+    body::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: url("https://imgs.search.brave.com/jhCiNAe8GiSI9AlL_vSWaHQP91gydfa-Fu93tqJ44dk/rs:fit:860:0:0:0/g:ce/aHR0cHM6Ly90NC5m/dGNkbi5uZXQvanBn/LzE2LzYxLzQyLzM3/LzM2MF9GXzE2NjE0/MjM3MDRfOVRJMzBB/cWdnd0RkZVNDQzNC/VGR4cFVERnM1RFRo/V1EuanBn") no-repeat center center/cover;
+      filter: blur(6px) brightness(0.9);
+      z-index: -2;
+    }
+    body::after {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(219, 234, 254, 0.4);
+      backdrop-filter: blur(6px);
+      z-index: -1;
+    }
+    header {
+      text-align: center;
+      color: #1e3a8a;
+      margin-bottom: 20px;
+    }
+    header svg {
+      width: 50px;
+      height: 50px;
+      vertical-align: middle;
+      margin-right: 10px;
+    }
+    .joystick-container {
+      display: flex;
+      justify-content: space-around;
+      width: 90%;
+      margin-top: 40px;
+      max-width: 600px;
+    }
+    .joystick {
+      position: relative;
+      width: 140px;
+      height: 140px;
+      background: radial-gradient(circle at center, #eff6ff 0%, #dbeafe 100%);
+      border-radius: 50%;
+      box-shadow: inset 0 0 12px rgba(100,149,237,0.4), 0 4px 10px rgba(0,0,0,0.1);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .stick {
+      position: absolute;
+      width: 60px;
+      height: 60px;
+      background: linear-gradient(145deg, #60a5fa, #3b82f6);
+      border-radius: 50%;
+      transition: 0.2s ease-out;
+      box-shadow: 0 6px 12px rgba(0,0,0,0.3);
+    }
+    button {
+      background-color: #2563eb;
+      color: white;
+      padding: 12px 24px;
+      border-radius: 10px;
+      border: none;
+      font-weight: 600;
+      transition: background 0.3s, transform 0.2s;
+      backdrop-filter: blur(4px);
+    }
+    button:hover {
+      background-color: #1d4ed8;
+      transform: scale(1.05);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <path fill="#2563eb" d="M10 58h44v4H10zM32 4a4 4 0 0 1 4 4v8l8 8-4 4-8-8-8 8-4-4 8-8V8a4 4 0 0 1 4-4zM28 36h8v14h-8z"/>
+    </svg>
+    <span class="text-4xl font-bold tracking-wide">RUSTY Control Hub</span>
+    <p class="text-gray-700 text-sm">Dual-Control BLE Interface for Rusty Mech Arm</p>
+  </header>
+
+  <button id="connectBtn">🔌 Connect ESP32</button>
+
+  <div class="joystick-container">
+    <div class="joystick" id="joystickA">
+      <div class="stick"></div>
+    </div>
+    <div class="joystick" id="joystickB">
+      <div class="stick"></div>
+    </div>
+  </div>
+
+  <script>
+    // BLE Variables
+    let bluetoothDevice, txCharacteristic;
+    const SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0";
+    const CHARACTERISTIC_UUID = "abcdef01-1234-5678-1234-56789abcdef0";
+
+    document.getElementById('connectBtn').addEventListener('click', async () => {
+      try {
+        bluetoothDevice = await navigator.bluetooth.requestDevice({
+          filters: [{ namePrefix: "BluScreen" }],
+          optionalServices: [SERVICE_UUID]
+        });
+        const server = await bluetoothDevice.gatt.connect();
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        txCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+        alert("✅ Connected to ESP32!");
+      } catch (err) {
+        alert("⚠ Could not connect: " + err);
+      }
+    });
+
+    async function sendCommand(cmd) {
+      if (!txCharacteristic) return;
+      try {
+        const enc = new TextEncoder();
+        await txCharacteristic.writeValue(enc.encode(cmd));
+        console.log("📤 Sent:", cmd);
+      } catch (e) { console.error(e); }
+    }
+
+    function setupJoystick(containerId, prefix) {
+      const joystick = document.getElementById(containerId);
+      const stick = joystick.querySelector('.stick');
+      const maxRange = 40;
+      let active = false, startX, startY;
+
+      joystick.addEventListener('touchstart', start);
+      joystick.addEventListener('mousedown', start);
+      document.addEventListener('touchmove', move);
+      document.addEventListener('mousemove', move);
+      document.addEventListener('touchend', end);
+      document.addEventListener('mouseup', end);
+
+      function start(e) {
+        active = true;
+        const t = e.touches ? e.touches[0] : e;
+        const rect = joystick.getBoundingClientRect();
+        startX = rect.left + rect.width / 2;
+        startY = rect.top + rect.height / 2;
+      }
+
+      function move(e) {
+        if (!active) return;
+        const t = e.touches ? e.touches[0] : e;
+        const dx = t.clientX - startX;
+        const dy = t.clientY - startY;
+        const dist = Math.min(Math.hypot(dx, dy), maxRange);
+        const angle = Math.atan2(dy, dx);
+        const x = Math.cos(angle) * dist;
+        const y = Math.sin(angle) * dist;
+        stick.style.transform = `translate(${x}px, ${y}px)`;
+
+        // Direction detection (simple 4-way)
+        let cmd = '';
+        if (Math.abs(x) > Math.abs(y)) cmd = x > 20 ? prefix + '_RIGHT' : x < -20 ? prefix + '_LEFT' : '';
+        else cmd = y > 20 ? prefix + '_DOWN' : y < -20 ? prefix + '_UP' : '';
+        if (cmd) sendCommand(cmd);
+      }
+
+      function end() {
+        active = false;
+        stick.style.transform = `translate(0,0)`;
+        sendCommand(prefix + '_CENTER');
+      }
+    }
+
+    setupJoystick('joystickA', 'A');
+    setupJoystick('joystickB', 'B');
+  </script>
+</body>
+</html>
